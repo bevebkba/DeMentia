@@ -6,7 +6,12 @@ import random
 ROBOT_IP = "127.0.0.1"
 CHARACTER = "Titan (Adult)"
 STARTING_USER_HAPPINESS = 0.5
-EXERCISE_HAPPINESS_THRESHOLD = 0.6
+EXERCISE_HAPPINESS_THRESHOLD = 0.7
+
+
+USER_NAME = "Arthur"
+CAT_NAME = "Luna"
+MORNING_ROUTINE_ENABLED = True
 
 
 class FurhatRobot:
@@ -42,17 +47,26 @@ class FurhatRobot:
         self.client.request_listen_config(
             languages=["en-US"],
             phrases=[
+                "yes",
+                "no",
+                "okay",
+                "repeat",
+                "help",
+                "goodbye",
+                "i don't know",
+                "i already did it",
+                "done",
+                "finished",
+                "i took my medication",
+                "i fed luna",
+                "i fed the cat",
                 "what is on my agenda today",
-                "let's do an exercise",
                 "agenda",
+                "let's do an exercise",
                 "exercise",
                 "apple",
                 "river",
                 "jacket",
-                "i don't know",
-                "okay",
-                "yes",
-                "no",
             ],
         )
 
@@ -97,6 +111,9 @@ class Intents:
     GREETING = "greeting"
     HELP = "help"
     EXIT = "exit"
+    DONE = "done"
+    MEDICATION_DONE = "medication_done"
+    CAT_FED = "cat_fed"
     FALLBACK = "fallback"
 
     PHRASES = {
@@ -187,6 +204,28 @@ class Intents:
             "finish",
             "close",
             "see you",
+        ],
+        DONE: [
+            "done",
+            "finished",
+            "i did it",
+            "already did it",
+            "completed",
+            "ready",
+        ],
+        MEDICATION_DONE: [
+            "i took my medication",
+            "i took my medicine",
+            "medication done",
+            "medicine done",
+            "i already took it",
+        ],
+        CAT_FED: [
+            "i fed luna",
+            "i fed the cat",
+            "luna is fed",
+            "cat is fed",
+            "i gave luna food",
         ],
     }
 
@@ -374,12 +413,92 @@ class AgendaSkill(Skill):
         self.say("Would you like to do something else?")
 
 
+# DailyAssistantSkill
+class DailyAssistantSkill(Skill):
+    def __init__(self, app):
+        super().__init__(app)
+        self.completed_tasks = set()
+
+    def run_morning_routine(self):
+        self.say(f"Good morning {USER_NAME}.")
+        self.say("I am here to help you start the day step by step.")
+        self.say("Let's begin with the most important things first.")
+
+        self.check_medication()
+        self.check_cat_food()
+        self.offer_agenda()
+        self.offer_exercise_if_appropriate()
+
+        self.say("That is enough for now.")
+        self.say("I will stay here. You can say agenda, exercise, help, or goodbye.")
+
+    def check_medication(self):
+        self.say("Your medication is on the counter.")
+        self.say("Please take your medication if you have not taken it yet.")
+        self.say("Tell me when you are done.")
+        user_text = self.listen()
+        intent = self.detect_intent(user_text)
+
+        if intent in [Intents.DONE, Intents.MEDICATION_DONE, Intents.AFFIRM]:
+            self.completed_tasks.add("medication")
+            self.increase_happiness(0.05)
+            self.say("Good. Medication is done.")
+        elif intent == Intents.REPEAT:
+            self.say("Please take your medication from the counter, then tell me when you are done.")
+            self.check_medication()
+        else:
+            self.decrease_happiness(0.05)
+            self.say("No problem. We will continue slowly.")
+
+    def check_cat_food(self):
+        self.say(f"{CAT_NAME} is probably hungry.")
+        self.say("The cat food is on the counter.")
+        self.say(f"Please feed {CAT_NAME}, then tell me when it is done.")
+        user_text = self.listen()
+        intent = self.detect_intent(user_text)
+
+        if intent in [Intents.DONE, Intents.CAT_FED, Intents.AFFIRM]:
+            self.completed_tasks.add("cat_food")
+            self.increase_happiness(0.05)
+            self.gesture("Smile", intensity=1.0, duration=2.0, wait=True)
+            self.say(f"Well done. {CAT_NAME} has been fed.")
+        elif intent == Intents.REPEAT:
+            self.say(f"Please take the cat food from the counter and feed {CAT_NAME}.")
+            self.check_cat_food()
+        else:
+            self.decrease_happiness(0.05)
+            self.say("That is okay. We can come back to this later.")
+
+    def offer_agenda(self):
+        self.say("Now I will check what is important today.")
+        self.app.agenda_skill.run()
+
+    def offer_exercise_if_appropriate(self):
+        if not self.app.should_prompt_exercise():
+            self.say("I will not ask for an exercise right now. First we keep the morning calm.")
+            return
+
+        self.say("You are doing well so far.")
+        self.say("A short memory exercise could be helpful now.")
+        self.say("Would you like to do it?")
+        user_text = self.listen()
+        intent = self.detect_intent(user_text)
+
+        if intent == Intents.AFFIRM:
+            self.app.memory_exercise.explain()
+        elif intent == Intents.DENY:
+            self.say("No problem. We can do it later.")
+        else:
+            self.say("I will skip the exercise for now.")
+
+
 class FurhatApp:
     def __init__(self):
         self.robot = FurhatRobot(ROBOT_IP, CHARACTER)
         self.user_happiness = STARTING_USER_HAPPINESS
         self.agenda_skill = AgendaSkill(self)
         self.memory_exercise = MemoryExercise(self)
+        self.daily_assistant = DailyAssistantSkill(self)
 
     def detect_intent(self, text):
         return IntentMatcher.detect(text)
@@ -405,20 +524,11 @@ class FurhatApp:
             self.robot.disconnect()
 
     def start_state(self):
-        self.robot.say("Hello! You can ask me what is on your agenda today, or say let's do an exercise.")
-
-        if self.should_prompt_exercise():
-            self.robot.say("You seem to be doing well today.")
-            self.robot.say("Would you like to do a short memory exercise?")
-            user_text = self.robot.listen()
-            intent = self.detect_intent(user_text)
-
-            if intent == Intents.AFFIRM:
-                self.memory_exercise.explain()
-            elif intent == Intents.DENY:
-                self.robot.say("No problem. We can do it later.")
-            else:
-                self.robot.say("That's okay. You can ask me for an exercise whenever you are ready.")
+        if MORNING_ROUTINE_ENABLED:
+            self.daily_assistant.run_morning_routine()
+        else:
+            self.robot.say("Hello. I am here with you.")
+            self.robot.say("I will help you with your daily routine, agenda, and memory exercises.")
 
         while True:
             user_text = self.robot.listen()
@@ -435,7 +545,7 @@ class FurhatApp:
                 self.robot.say("Hello. I am here with you.")
 
             elif intent == Intents.HELP:
-                self.robot.say("You can ask about your agenda, or you can ask me to start an exercise.")
+                self.robot.say("I can guide your daily routine, remind you about medication, help with feeding Luna, check your agenda, or start a memory exercise.")
 
             elif intent == Intents.AGENDA:
                 self.robot.gesture("BigSmile", intensity=1.0, duration=1.0, wait=True)
@@ -447,9 +557,12 @@ class FurhatApp:
             elif intent == Intents.REPEAT:
                 self.robot.say("No problem. You can say agenda, exercise, help, or goodbye.")
 
+            elif intent in [Intents.DONE, Intents.MEDICATION_DONE, Intents.CAT_FED]:
+                self.robot.say("Good. I have noted that.")
+
             else:
-                self.robot.say("I heard you, but I am not sure what you want me to do next.")
-                self.robot.say("You can say agenda, exercise, help, or goodbye.")
+                self.robot.say("I heard you, but I am not sure what you need next.")
+                self.robot.say("You can say help, agenda, exercise, done, or goodbye.")
 
 
 if __name__ == "__main__":
